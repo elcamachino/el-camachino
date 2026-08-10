@@ -695,9 +695,18 @@ function subscribeRealtime(){
 }
 
 async function saveOrderToSupabase(order){
-  const row={id:order.id,numero:order.number,fecha:order.date,pago:Number(order.payment||0),cambio:Number(order.change||0),estado:order.status||"Pendiente",datos:order};
-  const {error}=await supabaseClient.from("pedidos").upsert(row,{onConflict:"id"});
+  const row={numero:order.number,fecha:order.date,pago:Number(order.payment||0),cambio:Number(order.change||0),estado:order.status||"Pendiente",datos:order};
+  // Al crear un pedido NO enviamos `id`: Supabase lo genera porque es GENERATED ALWAYS.
+  // Al editar un pedido existente sí usamos su id generado por Supabase.
+  if(order.id && /^\d+$/.test(String(order.id))){
+    const {data,error}=await supabaseClient.from("pedidos").update(row).eq("id",Number(order.id)).select("*").single();
+    if(error)throw error;
+    return data;
+  }
+  const {data,error}=await supabaseClient.from("pedidos").insert(row).select("*").single();
   if(error)throw error;
+  if(data && data.id!=null) order.id=String(data.id);
+  return data;
 }
 async function deleteOrderFromSupabase(id){
   const {error}=await supabaseClient.from("pedidos").delete().eq("id",id);
@@ -924,7 +933,7 @@ $("saveBtn").onclick=async()=>{
    }
    state.editingOrderId=null;
  }
- const order={...base,id:crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()),number:makeOrderNumber(date,orders),date,createdAt:now.toISOString(),status:"Pendiente"};
+ const order={...base,number:makeOrderNumber(date,orders),date,createdAt:now.toISOString(),status:"Pendiente"};
  try{
    await saveOrderToSupabase(order);
    orders.push(order);saveOrders(orders);resetOrderForm();renderCart();renderOrders();updateStats();toast("☁️ Pedido "+order.number+" guardado y sincronizado");
