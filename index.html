@@ -651,6 +651,62 @@ function saveCatalogLocal(){
 function saveCatalog(){ saveCatalogLocal(); }
 loadCatalog();
 
+// ===== SUPABASE REALTIME =====
+let realtimeChannels=[];
+
+async function syncOrdersFromSupabase(){
+  try{
+    const {data,error}=await supabaseClient.from("pedidos").select("id,numero,fecha,pago,cambio,estado,datos").order("created_at",{ascending:true});
+    if(error) throw error;
+    if(!Array.isArray(data)) return;
+    const mapped=data.map(row=>{
+      let o={};
+      try{o=typeof row.datos==='string'?JSON.parse(row.datos):(row.datos||{});}catch(e){o={};}
+      return {...o,id:String(row.id),number:row.numero||o.number||"",date:row.fecha||o.date||"",payment:row.pago??o.payment??0,change:row.cambio??o.change??0,status:row.estado||o.status||"Pendiente"};
+    });
+    saveOrders(mapped);
+    renderOrders();updateStats();
+  }catch(e){console.error("Supabase pedidos:",e);}
+}
+
+function subscribeRealtime(){
+  realtimeChannels.forEach(ch=>{try{supabaseClient.removeChannel(ch)}catch(e){}});
+  realtimeChannels=[];
+  const catalogCh=supabaseClient.channel("el-camachino-catalogo-realtime")
+    .on("postgres_changes",{event:"*",schema:"public",table:"productos"},async()=>{await syncCatalogFromSupabase();toast("⚡ Catálogo actualizado");})
+    .on("postgres_changes",{event:"*",schema:"public",table:"categorias"},async()=>{await syncCatalogFromSupabase();toast("⚡ Categorías actualizadas");})
+    .subscribe(status=>console.log("Realtime catálogo:",status));
+  const ordersCh=supabaseClient.channel("el-camachino-pedidos-realtime")
+    .on("postgres_changes",{event:"*",schema:"public",table:"pedidos"},async payload=>{
+      const row=payload.new||payload.old;if(!row)return;
+      const current=loadOrders();
+      if(payload.eventType==="DELETE"){
+        saveOrders(current.filter(o=>String(o.id)!==String(row.id)));renderOrders();updateStats();toast("⚡ Pedido eliminado");return;
+      }
+      let o={};try{o=typeof row.datos==='string'?JSON.parse(row.datos):(row.datos||{});}catch(e){}
+      o={...o,id:String(row.id),number:row.numero||o.number||"",date:row.fecha||o.date||"",payment:row.pago??o.payment??0,change:row.cambio??o.change??0,status:row.estado||o.status||"Pendiente"};
+      const idx=current.findIndex(x=>String(x.id)===String(o.id));
+      if(idx>=0)current[idx]=o;else current.push(o);
+      saveOrders(current);renderOrders();updateStats();
+      toast(payload.eventType==="INSERT"?"⚡ Nuevo pedido":"⚡ Pedido actualizado");
+    })
+    .subscribe(status=>console.log("Realtime pedidos:",status));
+  realtimeChannels.push(catalogCh,ordersCh);
+}
+
+async function saveOrderToSupabase(order){
+  const row={id:order.id,numero:order.number,fecha:order.date,pago:Number(order.payment||0),cambio:Number(order.change||0),estado:order.status||"Pendiente",datos:order};
+  const {error}=await supabaseClient.from("pedidos").upsert(row,{onConflict:"id"});
+  if(error)throw error;
+}
+async function deleteOrderFromSupabase(id){
+  const {error}=await supabaseClient.from("pedidos").delete().eq("id",id);
+  if(error)throw error;
+}
+
+syncOrdersFromSupabase();
+subscribeRealtime();
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")subscribeRealtime();});
 
 /* Configuración de opciones. También permite que Administración controle productos nuevos. */
 function catalogConfigFor(p){
@@ -850,40 +906,31 @@ function makeOrderNumber(dateStr,orders){
  const nums=orders.filter(o=>o.date===dateStr).map(o=>Number(o.number.replace("#",""))||0);
  return "#"+String((Math.max(0,...nums)+1)).padStart(3,"0");
 }
-$("saveBtn").onclick=()=>{
+$("saveBtn").onclick=async()=>{
  if(!state.cart.length)return;
  const orders=loadOrders(),date=todayKey(),now=new Date();
  const total=cartTotal(),paymentMethod=$("paymentMethod").value;
  const payment=paymentMethod==="Transferencia" ? total : Number($("payment").value||0);
  if(payment<total){toast("El pago es insuficiente");return}
  if($("orderType").value==="Entrega"&&!$("deliveryAddress").value.trim()){toast("Escribe el domicilio de entrega");$("deliveryAddress").focus();return}
- const base={
-   requestedTime:$("requestedTime").value,
-   customer:$("customer").value.trim(),phone:$("phone").value.trim(),
-   type:$("orderType").value,address:$("orderType").value==="Entrega"?$("deliveryAddress").value.trim():"",
-   paymentMethod,products:JSON.parse(JSON.stringify(state.cart)),
-   total,payment,change:payment-total,notes:$("notes").value.trim()
- };
+ const base={requestedTime:$("requestedTime").value,customer:$("customer").value.trim(),phone:$("phone").value.trim(),type:$("orderType").value,address:$("orderType").value==="Entrega"?$("deliveryAddress").value.trim():"",paymentMethod,products:JSON.parse(JSON.stringify(state.cart)),total,payment,change:payment-total,notes:$("notes").value.trim()};
  if(state.editingOrderId){
    const idx=orders.findIndex(o=>o.id===state.editingOrderId);
    if(idx>=0){
-     orders[idx]={...orders[idx],...base};
-     saveOrders(orders);
-     const num=orders[idx].number;
-     state.editingOrderId=null;
-     resetOrderForm();
-     renderCart();renderOrders();updateStats();toast("Pedido "+num+" actualizado");
+     const updated={...orders[idx],...base};
+     try{await saveOrderToSupabase(updated);orders[idx]=updated;saveOrders(orders);state.editingOrderId=null;resetOrderForm();renderCart();renderOrders();updateStats();toast("☁️ Pedido "+updated.number+" actualizado");}
+     catch(e){console.error(e);toast("⚠️ No se pudo guardar el pedido en la nube");}
      return;
    }
    state.editingOrderId=null;
  }
- const order={...base,
-   id:crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()),
-   number:makeOrderNumber(date,orders),date,createdAt:now.toISOString(),status:"Pendiente"
- };
- orders.push(order);saveOrders(orders);
- resetOrderForm();
- renderCart();renderOrders();updateStats();toast("Pedido "+order.number+" guardado");
+ const order={...base,id:crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()),number:makeOrderNumber(date,orders),date,createdAt:now.toISOString(),status:"Pendiente"};
+ try{
+   await saveOrderToSupabase(order);
+   orders.push(order);saveOrders(orders);resetOrderForm();renderCart();renderOrders();updateStats();toast("☁️ Pedido "+order.number+" guardado y sincronizado");
+ }catch(e){
+   console.error(e);orders.push(order);saveOrders(orders);renderCart();renderOrders();updateStats();toast("⚠️ Guardado local; no se pudo sincronizar");
+ }
 };
 
 function resetOrderForm(){
@@ -977,13 +1024,16 @@ toggleDeliveryAddress();
 
 $("orderSearch").oninput=renderOrders;
 
-function changeStatus(id){
+async function changeStatus(id){
  const a=loadOrders(),o=a.find(x=>x.id===id);if(!o)return;
- o.status=nextStatus(o.status);saveOrders(a);renderOrders();updateStats();
+ const previous=o.status;o.status=nextStatus(o.status);
+ try{await saveOrderToSupabase(o);saveOrders(a);renderOrders();updateStats();toast("☁️ Estado actualizado");}
+ catch(e){o.status=previous;saveOrders(a);renderOrders();updateStats();toast("⚠️ No se pudo sincronizar el estado");}
 }
-function deleteOrder(id){
+async function deleteOrder(id){
  if(!confirm("¿Eliminar este pedido?"))return;
- saveOrders(loadOrders().filter(o=>o.id!==id));renderOrders();updateStats();
+ try{await deleteOrderFromSupabase(id);const a=loadOrders().filter(o=>String(o.id)!==String(id));saveOrders(a);renderOrders();updateStats();toast("☁️ Pedido eliminado");}
+ catch(e){console.error(e);toast("⚠️ No se pudo eliminar en la nube");}
 }
 function updateStats(){
  const d=todayKey(),a=loadOrders().filter(o=>o.date===d);
