@@ -5,12 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>EL CAMACHINO — Control de Pedidos</title>
 <style>
-  .brand-logo {
-  width: 40px;
-  height: 40px;
-  object-fit: contain;
-  vertical-align: middle;
-}
 :root{
   --green:#0d8f73; --green2:#13b892; --turq:#13bfc1; --dark:#17313a;
   --muted:#6b7c83; --bg:#edf7f5; --white:#fff; --line:#dce9e7;
@@ -389,12 +383,47 @@ button{cursor:pointer}
 }
 #printArea{display:none}
 .ticket{width:80mm;padding:5mm;margin:auto;font-family:Arial,sans-serif;color:#000;font-size:12px}.ticket h1{text-align:center;font-size:18px;margin:0 0 4px}.ticket .center{text-align:center}.ticket hr{border:0;border-top:1px dashed #000;margin:8px 0}.ticket .row{display:flex;justify-content:space-between;gap:8px}.ticket .prod{margin:8px 0}.ticket .prod-name{font-weight:bold}.ticket .sub{padding-left:8px;font-size:11px}.ticket .grand{font-size:15px;font-weight:bold}
+
+/* ===== MODO PANTALLA DE PEDIDOS ===== */
+body.orders-screen{background:#e9f1f3;overflow:hidden}
+.exit-order-screen-btn{display:none;position:fixed;top:14px;left:14px;right:auto;z-index:9999;border:0;border-radius:12px;padding:11px 16px;background:#fff;color:var(--dark);font-weight:800;font-size:15px;box-shadow:0 4px 16px rgba(0,0,0,.18);cursor:pointer}
+body.orders-screen .exit-order-screen-btn{display:block}
+body.orders-screen > .app-header, body.orders-screen > main{display:none!important}
+body.orders-screen .history{display:block!important;margin:0!important;padding:14px!important;min-height:100vh;height:100vh}
+body.orders-screen .history-panel{padding-top:70px;height:100%;display:flex;flex-direction:column;max-width:none!important}
+body.orders-screen .history-head{position:sticky;top:0;z-index:5;background:var(--white);padding-bottom:12px}
+body.orders-screen #ordersList{flex:1;overflow:auto;padding:8px}
+body.orders-screen .order{font-size:1.08rem;padding:18px;margin-bottom:12px}
+body.orders-screen .order-num{font-size:1.35rem}
+body.orders-screen .order-products{font-size:1.18rem;line-height:1.65}
+body.orders-screen .order-notes{font-size:1.2rem}
+body.orders-screen .order-actions .small-btn{font-size:1rem;padding:10px 14px}
+body.orders-screen .history-head .admin-tools{display:none!important}
+body.orders-screen #orderSearch{max-width:420px}
+
+/* Detalles visibles de pedidos */
+.order-notes{margin-top:10px;padding:10px 12px;border-radius:10px;background:#fff7d6;border:1px solid #eadb8d;font-weight:700}
+.order-shrimp{display:inline-block;margin-top:4px;padding:3px 8px;border-radius:999px;background:#e5f7f2;color:#126b59;font-weight:700}
+.order-day-total{font-weight:800;color:var(--dark)}
+
+/* ===== AGENDA ===== */
+.agenda-panel{display:none;margin-top:14px}
+.agenda-panel.active{display:block}
+.agenda-toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px}
+.agenda-days{display:grid;grid-template-columns:repeat(7,minmax(150px,1fr));gap:10px;overflow-x:auto}
+.agenda-day{background:#f7fbfa;border:1px solid var(--line);border-radius:14px;padding:12px;min-height:180px}
+.agenda-day h3{margin:0 0 8px;font-size:1rem;text-transform:capitalize}
+.agenda-day .agenda-order{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px;margin:7px 0;cursor:pointer}
+.agenda-order strong{display:block}.agenda-order small{display:block;color:var(--muted);margin-top:3px}
+@media(max-width:900px){.agenda-days{grid-template-columns:repeat(7,minmax(210px,1fr))}}
+
 </style>
 </head>
 <body>
+<button id="exitOrderScreenBtn" class="exit-order-screen-btn" type="button" title="Salir del modo pedidos">↩️ Salir de pedidos</button>
 <header class="topbar">
   <div class="topbar-inner">
-    <div class="brand"><img src="ilustracion.png" class="brand-logo"> EL CAMACHINO — Control de Pedidos</div><button class="top-admin" id="topAdminBtn" type="button">⚙️</button><button class="mobile-top-cart" id="mobileTopCart" type="button">🛒 <span id="mobileTopCount">0</span></button>
+    <div class="brand">🍤 EL CAMACHINO</div><button class="top-admin" id="topAdminBtn" type="button">⚙️</button><button class="mobile-top-cart" id="mobileTopCart" type="button">🛒 <span id="mobileTopCount">0</span></button>
     <div class="stats">
       <div class="stat"><b id="todayOrders">0</b><span>PEDIDOS DE HOY</span></div>
       <div class="stat"><b id="todaySales">$0</b><span>VENTAS DE HOY</span></div>
@@ -466,10 +495,23 @@ button{cursor:pointer}
     <h2>📋 Pedidos guardados</h2>
     <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;flex:1;justify-content:flex-end">
       <input id="orderSearch" style="max-width:350px;flex:1;min-width:220px;border:1px solid var(--line);border-radius:10px;padding:10px" placeholder="🔎 Número, cliente o producto">
-      <button class="small-btn" id="adminBtn">⚙️ Administración</button><button class="small-btn" id="exportBackup">💾 Exportar respaldo</button>
-      <button class="small-btn" id="importBackupBtn">📥 Importar respaldo</button>
+      <div class="admin-tools" style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
+        <button class="small-btn" id="agendaBtn">📅 Agenda</button>
+        <button class="small-btn" id="orderScreenBtn">🖥️ Modo pedidos</button>
+        <button class="small-btn" id="adminBtn">⚙️ Administración</button><button class="small-btn" id="exportBackup">💾 Exportar respaldo</button>
+        <button class="small-btn" id="importBackupBtn">📥 Importar respaldo</button>
+      </div>
       <input id="importBackup" type="file" accept="application/json,.json" hidden>
     </div>
+  </div>
+  <div id="agendaPanel" class="agenda-panel">
+   <div class="agenda-toolbar">
+    <button class="small-btn" id="agendaPrev">◀️ Semana anterior</button>
+    <strong id="agendaTitle">Semana</strong>
+    <button class="small-btn" id="agendaToday">📍 Esta semana</button>
+    <button class="small-btn" id="agendaNext">Semana siguiente ▶️</button>
+   </div>
+   <div id="agendaDays" class="agenda-days"></div>
   </div>
   <div id="ordersList" class="history-list"></div>
  </div>
@@ -786,6 +828,7 @@ function optionText(o){
   if(o.spicy)a.push("Picor: "+o.spicy);
   if(o.mango)a.push("Extra mango");
   if(o.pulpo)a.push("Pulpo");
+  if(o.camaronPreparacion)a.push("Camarón: "+o.camaronPreparacion);
   return a;
 }
 function renderCart(){
@@ -1004,30 +1047,91 @@ function importBackupFile(file){
  }; reader.readAsText(file);
 }
 
+let agendaOffset=0;
+let ordersScreenActive=false;
+let agendaActive=false;
+
 function renderOrders(){
- const q=$("orderSearch").value.trim().toLowerCase();
- let orders=loadOrders().slice().reverse();
- if(q)orders=orders.filter(o=>{
-   const txt=[o.number,o.customer,o.phone,...o.products.map(p=>p.name)].join(" ").toLowerCase();
-   return txt.includes(q)||o.number.toLowerCase()===q.replace(/^#/,"#");
- });
- $("ordersList").innerHTML=orders.length?orders.map(o=>`
- <article class="order">
-  <div class="order-top"><span class="order-num">${escapeHTML(o.number)}</span><span class="badge ${statusClass(o.status)}">${escapeHTML(o.status)}</span><b>${money(o.total)}</b></div>
-  <div class="order-meta">${escapeHTML(o.customer||"Sin nombre")} · ${escapeHTML(o.type)}${o.address?" · 📍 "+escapeHTML(o.address):""} · ${escapeHTML(o.paymentMethod||"Efectivo")} · ${new Date(o.createdAt).toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"})}${o.requestedTime?" · Horario: "+escapeHTML(o.requestedTime):""}</div>
-  <div class="order-products">${o.products.map(p=>`${p.qty}× ${escapeHTML(p.name)}${optionText(p.options).length?" — "+optionText(p.options).map(escapeHTML).join(", "):""}`).join("<br>")}</div>
-  <div class="order-actions">
-   <button class="small-btn" data-edit="${o.id}">✏️ Editar pedido</button>
-   ${o.status!=="Entregado"?`<button class="small-btn next-btn" data-next="${o.id}">➡️ Siguiente estado</button>`:""}
-   <button class="small-btn" data-print="${o.id}">🖨️ IMPRIMIR</button>
-   <button class="small-btn delete-btn" data-delete="${o.id}">Eliminar</button>
-  </div>
- </article>`).join(""):'<div class="empty">No hay pedidos que coincidan.</div>';
- document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>editOrder(b.dataset.edit));
- document.querySelectorAll("[data-next]").forEach(b=>b.onclick=()=>changeStatus(b.dataset.next));
- document.querySelectorAll("[data-print]").forEach(b=>b.onclick=()=>printOrder(b.dataset.print));
- document.querySelectorAll("[data-delete]").forEach(b=>b.onclick=()=>deleteOrder(b.dataset.delete));
+  const q=$("orderSearch").value.trim().toLowerCase();
+  let orders=loadOrders().slice().reverse();
+  if(q)orders=orders.filter(o=>{
+    const txt=[o.number,o.customer,o.phone,o.notes,...o.products.map(p=>p.name),...o.products.flatMap(p=>optionText(p.options||{}))].join(" ").toLowerCase();
+    return txt.includes(q)||o.number.toLowerCase()===q.replace(/^#/,'#');
+  });
+  $("ordersList").innerHTML=orders.length?orders.map(o=>`
+  <article class="order">
+   <div class="order-top"><span class="order-num">${escapeHTML(o.number)}</span><span class="badge ${statusClass(o.status)}">${escapeHTML(o.status)}</span><b>${money(o.total)}</b></div>
+   <div class="order-meta">${escapeHTML(o.customer||"Sin nombre")} · ${escapeHTML(o.type)}${o.address?" · 📍 "+escapeHTML(o.address):""} · ${escapeHTML(o.paymentMethod||"Efectivo")} · ${new Date(o.createdAt).toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"})}${o.requestedTime?" · Horario: "+escapeHTML(o.requestedTime):""}</div>
+   <div class="order-products">${o.products.map(p=>{
+     const opts=optionText(p.options||{});
+     return `<div>${p.qty}× ${escapeHTML(p.name)}${opts.length?` — ${opts.map(x=>escapeHTML(x)).join(", ")}`:""}</div>`;
+   }).join("")}</div>
+   ${o.notes?`<div class="order-notes">📝 NOTA: ${escapeHTML(o.notes)}</div>`:""}
+   <div class="order-actions">
+    <button class="small-btn" data-edit="${o.id}">✏️ Editar pedido</button>
+    ${o.status!=="Entregado"?`<button class="small-btn next-btn" data-next="${o.id}">➡️ Siguiente estado</button>`:""}
+    <button class="small-btn" data-print="${o.id}">🖨️ IMPRIMIR</button>
+    <button class="small-btn delete-btn" data-delete="${o.id}">Eliminar</button>
+   </div>
+  </article>`).join(""):'<div class="empty">No hay pedidos que coincidan.</div>';
+  document.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>editOrder(b.dataset.edit));
+  document.querySelectorAll("[data-next]").forEach(b=>b.onclick=()=>changeStatus(b.dataset.next));
+  document.querySelectorAll("[data-print]").forEach(b=>b.onclick=()=>printOrder(b.dataset.print));
+  document.querySelectorAll("[data-delete]").forEach(b=>b.onclick=()=>deleteOrder(b.dataset.delete));
+  if(agendaActive)renderAgenda();
 }
+
+function getWeekStart(date){
+  const d=new Date(date+"T12:00:00");
+  const day=d.getDay();
+  d.setDate(d.getDate()-(day===0?6:day-1));
+  return d;
+}
+function dateKeyFromDate(d){return d.toLocaleDateString("en-CA",{timeZone:"America/Mexico_City"})}
+function renderAgenda(){
+  const base=getWeekStart(todayKey());
+  base.setDate(base.getDate()+agendaOffset*7);
+  const days=[];
+  for(let i=0;i<7;i++){const d=new Date(base);d.setDate(base.getDate()+i);days.push(d)}
+  const fmt=d=>d.toLocaleDateString("es-MX",{day:"2-digit",month:"short"});
+  $("agendaTitle").textContent=`${fmt(days[0])} – ${fmt(days[6])}`;
+  const orders=loadOrders();
+  $("agendaDays").innerHTML=days.map(d=>{
+    const key=dateKeyFromDate(d);
+    const dayOrders=orders.filter(o=>o.date===key).sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt));
+    const total=dayOrders.reduce((sum,o)=>sum+Number(o.total||0),0);
+    return `<div class="agenda-day">
+      <h3>${d.toLocaleDateString("es-MX",{weekday:"long",day:"numeric",month:"short"})}</h3>
+      <div class="order-day-total">${dayOrders.length} pedido${dayOrders.length===1?"":"s"} · ${money(total)}</div>
+      ${dayOrders.length?dayOrders.map(o=>`<div class="agenda-order" data-agenda-id="${o.id}">
+        <strong>${escapeHTML(o.number)} · ${new Date(o.createdAt).toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit"})}</strong>
+        <small>${escapeHTML(o.customer||"Sin nombre")} · ${escapeHTML(o.status)}</small>
+        <small>${o.notes?"📝 "+escapeHTML(o.notes):""}</small>
+      </div>`).join(""):"<small>Sin pedidos</small>"}
+    </div>`;
+  }).join("");
+  document.querySelectorAll("[data-agenda-id]").forEach(el=>el.onclick=()=>editOrder(el.dataset.agendaId));
+}
+function toggleAgenda(){
+  agendaActive=!agendaActive;
+  $("agendaPanel").classList.toggle("active",agendaActive);
+  $("ordersList").style.display=agendaActive?"none":"";
+  $("agendaBtn").textContent=agendaActive?"📋 Pedidos":"📅 Agenda";
+  if(agendaActive)renderAgenda();
+}
+function toggleOrderScreen(){
+  ordersScreenActive=!ordersScreenActive;
+  document.body.classList.toggle("orders-screen",ordersScreenActive);
+  $("orderScreenBtn").textContent=ordersScreenActive?"↩️ Salir de pantalla":"🖥️ Modo pedidos";
+  if(ordersScreenActive && agendaActive){agendaActive=false;$("agendaPanel").classList.remove("active");$("ordersList").style.display="";$("agendaBtn").textContent="📅 Agenda";}
+}
+
+$("agendaBtn").onclick=toggleAgenda;
+$("orderScreenBtn").onclick=toggleOrderScreen;
+$("exitOrderScreenBtn").onclick=toggleOrderScreen;
+$("agendaPrev").onclick=()=>{agendaOffset--;renderAgenda()};
+$("agendaNext").onclick=()=>{agendaOffset++;renderAgenda()};
+$("agendaToday").onclick=()=>{agendaOffset=0;renderAgenda()};
 
 function toggleDeliveryAddress(){
   const isDelivery=$("orderType").value==="Entrega";
