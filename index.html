@@ -1053,7 +1053,10 @@ let agendaActive=false;
 
 function renderOrders(){
   const q=$("orderSearch").value.trim().toLowerCase();
-  let orders=loadOrders().slice().reverse();
+  const currentDay=todayKey();
+  // "Pedidos guardados" muestra solamente los pedidos del día actual.
+  // Los pedidos de días anteriores NO se eliminan: permanecen disponibles en la Agenda.
+  let orders=loadOrders().filter(o=>o.date===currentDay).slice().reverse();
   if(q)orders=orders.filter(o=>{
     const txt=[o.number,o.customer,o.phone,o.notes,...o.products.map(p=>p.name),...o.products.flatMap(p=>optionText(p.options||{}))].join(" ").toLowerCase();
     return txt.includes(q)||o.number.toLowerCase()===q.replace(/^#/,'#');
