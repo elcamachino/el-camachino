@@ -77,7 +77,7 @@ button{cursor:pointer}
 
 .delivery-address textarea{min-height:68px}
 .admin-modal{max-width:760px}
-.admin-tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.admin-tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}.admin-tabs .small-btn.active{background:#e1f7f2;border-color:#13a98c;color:#087d69}.admin-extra-price{font-weight:900;color:var(--green)}.admin-muted{font-size:11px;color:var(--muted)}.admin-checks{display:grid;gap:7px}.admin-check{display:flex;gap:8px;align-items:center;font-size:13px}.admin-section-title{font-weight:900;margin:10px 0 7px}.admin-extra-row{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--line);border-radius:12px;padding:11px;margin-bottom:8px}.admin-extra-main{min-width:0}.admin-extra-actions{display:flex;gap:6px;flex-wrap:wrap}.admin-help{font-size:12px;color:var(--muted);background:#f5fbfa;border:1px solid var(--line);padding:10px;border-radius:10px;margin-bottom:10px}
 .admin-list{display:grid;gap:8px}
 .admin-row{border:1px solid var(--line);border-radius:12px;padding:10px;background:#fbfefd}
 .admin-row-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -531,6 +531,7 @@ body.orders-screen #orderSearch{max-width:420px}
     <div class="admin-tabs">
       <button class="small-btn" id="adminNew">➕ Nuevo producto</button>
       <button class="small-btn" id="adminNewCat">📂 Nueva categoría</button>
+      <button class="small-btn" id="adminExtrasTab">🧂 Extras</button>
     </div>
     <div id="adminBody"></div>
   </div>
@@ -552,6 +553,9 @@ const SUPABASE_URL="https://advsdffcnlnsrrlxnuaa.supabase.co";
 const SUPABASE_KEY="sb_publishable_C0I0veAuSkhM5BAsBjLgnQ_Oc4_3NTK";
 const supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 let supabaseReady=false;
+let EXTRAS=[];
+let PRODUCT_EXTRAS={};
+let adminView="products";
 
 
 /* Catálogo editable: agregar productos aquí no requiere reescribir la lógica. */
@@ -644,17 +648,83 @@ async function syncCatalogFromSupabase(){
         modal:p.modal||"",
         size:p.tamano||p.size||""
       }));
-      localStorage.setItem(catalogKey,JSON.stringify({version:2,categories:CATEGORIES,products:PRODUCTS}));
+      saveCatalogLocal();
       supabaseReady=true;
       if(!CATEGORIES.includes(state.category)) state.category=CATEGORIES[0]||"General";
-      renderCatalog();renderAdmin();
-      toast("☁️ Catálogo sincronizado");
+      renderCatalog();
     }
+    await syncExtrasFromSupabase(true);
+    renderAdmin();
+    toast("☁️ Catálogo sincronizado");
   }catch(e){
     console.error("Supabase catálogo:",e);
     toast("⚠️ No se pudo sincronizar catálogo");
   }
 }
+
+async function syncExtrasFromSupabase(silent=false){
+  try{
+    const [{data:extras,error:ee},{data:links,error:le}]=await Promise.all([
+      supabaseClient.from("extras").select("id,nombre,precio,activo,orden").order("orden",{ascending:true}).order("id",{ascending:true}),
+      supabaseClient.from("producto_extras").select("producto_id,extra_id")
+    ]);
+    if(ee) throw ee; if(le) throw le;
+    EXTRAS=(extras||[]).map(x=>({id:String(x.id),name:x.nombre||"",price:Number(x.precio||0),active:x.activo!==false,order:Number(x.orden||0)}));
+    PRODUCT_EXTRAS={};
+    (links||[]).forEach(x=>{
+      const pid=String(x.producto_id),eid=String(x.extra_id);
+      if(!PRODUCT_EXTRAS[pid])PRODUCT_EXTRAS[pid]=[];
+      PRODUCT_EXTRAS[pid].push(eid);
+    });
+    localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));
+    if(!silent)toast("☁️ Extras sincronizados");
+    return true;
+  }catch(e){
+    console.warn("Extras no disponibles todavía:",e);
+    try{
+      const saved=JSON.parse(localStorage.getItem("elCamachinoExtrasV1")||"null");
+      if(saved){EXTRAS=Array.isArray(saved.extras)?saved.extras:[];PRODUCT_EXTRAS=saved.productExtras||{};}
+    }catch(_){ }
+    return false;
+  }
+}
+async function saveExtraToSupabase(extra){
+  const row={nombre:extra.name.trim(),precio:Number(extra.price||0),activo:extra.active!==false,orden:Number(extra.order||0)};
+  if(extra.id && !String(extra.id).startsWith("extra-")){
+    const {data,error}=await supabaseClient.from("extras").update(row).eq("id",extra.id).select("*").single();
+    if(error)throw error;
+    extra.id=String(data.id);return data;
+  }
+  const {data,error}=await supabaseClient.from("extras").insert(row).select("*").single();
+  if(error)throw error;
+  extra.id=String(data.id);return data;
+}
+async function saveProductExtrasToSupabase(productId,extraIds){
+  const pid=Number(productId);
+  if(!Number.isFinite(pid)) return;
+  const {error:delError}=await supabaseClient.from("producto_extras").delete().eq("producto_id",pid);
+  if(delError)throw delError;
+  const rows=[...new Set(extraIds.map(String))].map(id=>({producto_id:pid,extra_id:Number(id)})).filter(x=>Number.isFinite(x.extra_id));
+  if(rows.length){const {error}=await supabaseClient.from("producto_extras").insert(rows);if(error)throw error;}
+  PRODUCT_EXTRAS[String(productId)]=rows.map(x=>String(x.extra_id));
+}
+function extraById(id){return EXTRAS.find(e=>String(e.id)===String(id));}
+function extraByName(name){return EXTRAS.find(e=>e.name.trim().toLowerCase()===String(name).trim().toLowerCase());}
+function extraPrice(name,fallback=5){const e=extraByName(name);return e?Number(e.price||0):fallback;}
+function mappedActiveExtras(p){
+  const ids=PRODUCT_EXTRAS[String(p.id)]||[];
+  return ids.map(extraById).filter(e=>e&&e.active!==false);
+}
+function productExtrasForModal(p,cfg){
+  // Mango y Pulpo ya no se preguntan al agregar ningún producto.
+  // Se excluyen incluso si quedaron configurados en Supabase o en datos antiguos.
+  return mappedActiveExtras(p).filter(e=>{
+    const name=e.name.trim().toLowerCase();
+    return name!=="mango" && name!=="pulpo";
+  });
+}
+function extraSelectionKey(e){return "extra_"+String(e.id);}
+function extraLabel(e){return `${escapeHTML(e.name)} +${money(e.price)}`;}
 
 async function saveProductToSupabase(p){
   const {data:cats,error:ce}=await supabaseClient.from("categorias").select("id,nombre");
@@ -723,6 +793,8 @@ function subscribeRealtime(){
   const catalogCh=supabaseClient.channel("el-camachino-catalogo-realtime")
     .on("postgres_changes",{event:"*",schema:"public",table:"productos"},async()=>{await syncCatalogFromSupabase();toast("⚡ Catálogo actualizado");})
     .on("postgres_changes",{event:"*",schema:"public",table:"categorias"},async()=>{await syncCatalogFromSupabase();toast("⚡ Categorías actualizadas");})
+    .on("postgres_changes",{event:"*",schema:"public",table:"extras"},async()=>{await syncExtrasFromSupabase();renderCatalog();renderAdmin();toast("⚡ Extras actualizados");})
+    .on("postgres_changes",{event:"*",schema:"public",table:"producto_extras"},async()=>{await syncExtrasFromSupabase();renderAdmin();})
     .subscribe(status=>console.log("Realtime catálogo:",status));
   const ordersCh=supabaseClient.channel("el-camachino-pedidos-realtime")
     .on("postgres_changes",{event:"*",schema:"public",table:"pedidos"},async payload=>{
@@ -772,8 +844,9 @@ function catalogConfigFor(p){
     askTostitosColor: !!p.askTostitosColor || modal==="tostiaguachile",
     askColor: !!p.askColor || modal==="aguachile" || modal==="tostiaguachile" || modal==="tostadaAguachile",
     askSpicy: !!p.askSpicy || modal==="aguachile" || modal==="tostiaguachile" || modal==="tostadaAguachile",
-    allowMango: p.allowMango===true || modal==="aguachile" || modal==="tostiaguachile" || modal==="ceviche",
-    allowPulpo: p.allowPulpo===true || modal==="aguachile" || modal==="tostiaguachile" || modal==="tostadaExtras" || modal==="tostadaAguachile",
+    // Mango y Pulpo ya no forman parte de las preguntas/opciones del pedido.
+    allowMango: false,
+    allowPulpo: false,
     askShrimpStyle: p.askShrimpStyle===true || p.ask_shrimp_style===true,
     modal
   };
@@ -828,6 +901,7 @@ function optionText(o){
   if(o.spicy)a.push("Picor: "+o.spicy);
   if(o.mango)a.push("Extra mango");
   if(o.pulpo)a.push("Pulpo");
+  if(Array.isArray(o.extras)) o.extras.forEach(e=>a.push(`${e.name} +${money(e.price)}`));
   if(o.camaronPreparacion)a.push("Camarón: "+o.camaronPreparacion);
   return a;
 }
@@ -865,22 +939,16 @@ function openModal(p){
   const cfg=catalogConfigFor(p);
   let html="";
 
-  if(cfg.modal==="ceviche"){
-    html += section("¿Con mango?",["Sin mango","Con mango +$5"],"mangoChoice");
-  }
+  // Mango y Pulpo (y cualquier otro extra) ya NO se preguntan por separado.
+  // Todos aparecen juntos en la sección "Extras" y se seleccionan con un toque.
   if(cfg.askTostitosColor) html += section("Color de Tostitos",["Verde","Morado"],"tostitosColor");
   if(cfg.askColor) html += section("Color del aguachile",["Negro","Verde","Rojo"],"aguachileColor");
   if(cfg.askSpicy) html += section("Intensidad de picor",["Normal","Extra picante"],"spicy");
 
-  const checksKeys=[];
-  if(cfg.allowMango && cfg.modal!=="ceviche") checksKeys.push("mango");
-  if(cfg.allowPulpo) checksKeys.push("pulpo");
-  if(checksKeys.length) html += checks(checksKeys);
+  const extras=productExtrasForModal(p,cfg);
+  if(extras.length) html += checks(extras);
 
   if(cfg.askShrimpStyle) html += section("¿Cómo quieres el camarón?",["Cocido","Curtido"],"camaronPreparacion");
-  if(cfg.modal==="tostadaExtras"){
-    html += section("¿Con mango?",["Sin mango","Con mango +$5"],"mangoChoice");
-  }
 
   $("modalTitle").textContent=p.name;
   $("modalBody").innerHTML=html || '<div class="empty">No hay opciones para este producto.</div>';
@@ -888,10 +956,10 @@ function openModal(p){
   bindModal();
 }
 function section(title,opts,keyName){
-  return `<div class="modal-section"><strong>${title}</strong><div class="option-grid">${opts.map(o=>`<button class="opt-btn" data-key="${keyName}" data-value="${o}">${o}</button>`).join("")}</div></div>`;
+  return `<div class="modal-section"><strong>${escapeHTML(title)}</strong><div class="option-grid">${opts.map(o=>`<button class="opt-btn" data-key="${escapeHTML(keyName)}" data-value="${escapeHTML(o)}">${escapeHTML(o)}</button>`).join("")}</div></div>`;
 }
-function checks(keys){
-  return `<div class="modal-section"><strong>Extras</strong><div class="option-grid">${keys.map(k=>`<button class="opt-btn" data-check="${k}">${k==="mango"?"Extra mango +$5":"Pulpo +$5"}</button>`).join("")}</div></div>`;
+function checks(extras){
+  return `<div class="modal-section"><strong>Extras</strong><div class="option-grid">${extras.map(e=>`<button class="opt-btn" data-check="${escapeHTML(extraSelectionKey(e))}" data-extra-id="${escapeHTML(e.id)}">${extraLabel(e)}</button>`).join("")}</div></div>`;
 }
 function bindModal(){
   document.querySelectorAll("#modalBody .opt-btn").forEach(b=>b.onclick=()=>{
@@ -915,9 +983,6 @@ $("confirmModal").onclick=()=>{
   if(cfg.askSpicy && !o.spicy) required.push("intensidad de picor");
   if(cfg.askTostitosColor && !o.tostitosColor) required.push("color de Tostitos");
 
-  if((cfg.modal==="ceviche" || cfg.modal==="tostadaExtras") && !o.mangoChoice)
-    required.push("si lleva mango o no");
-
   if(cfg.askShrimpStyle && !o.camaronPreparacion)
     required.push("si el camarón es cocido o curtido");
 
@@ -926,11 +991,15 @@ $("confirmModal").onclick=()=>{
     return;
   }
 
-  const mangoFromChoice=o.mangoChoice && o.mangoChoice.startsWith("Con mango");
-  const price=p.price + ((o.mango===true || mangoFromChoice)?5:0) + (o.pulpo?5:0);
-  const options={...o};
-  if(mangoFromChoice) options.mango=true;
-  if(o.mangoChoice) delete options.mangoChoice;
+  const selectedExtras=[];
+  Object.keys(o).filter(k=>k.startsWith("extra_") && o[k]).forEach(k=>{
+    const eid=k.slice(6);
+    const e=extraById(eid) || (eid==="legacy-mango"?{id:eid,name:"Mango",price:5}:{id:eid,name:"Pulpo",price:5});
+    if(e) selectedExtras.push({id:String(e.id),name:e.name,price:Number(e.price||0)});
+  });
+  const price=p.price + selectedExtras.reduce((sum,e)=>sum+Number(e.price||0),0);
+  const options={...o,extras:selectedExtras};
+  Object.keys(options).filter(k=>k.startsWith("extra_")).forEach(k=>delete options[k]);
 
   const temp={id:p.id,options};
   const existing=state.cart.find(i=>cartItemKey(i)===cartItemKey(temp));
@@ -1232,119 +1301,88 @@ $("saveBtn").onclick=function(){
 };
 
 
-function renderAdmin(){
+async function renderAdmin(){
   const body=$("adminBody");
-  body.innerHTML=`<div class="admin-list">${
-    PRODUCTS.map(p=>`
-      <div class="admin-row">
-        <div class="admin-row-top">
-          <div>
-            <div class="admin-row-name">${escapeHTML(p.name)}</div>
-            <div class="admin-muted">${escapeHTML(p.cat)} · ${money(p.price)} · ${p.active===false?"DESACTIVADO":"ACTIVO"}</div>
-          </div>
-          <span>${p.active===false?"⛔":"✅"}</span>
-        </div>
-        <div class="admin-actions">
-          <button class="small-btn" data-edit-product="${p.id}">✏️ Editar</button>
-          <button class="small-btn" data-toggle-product="${p.id}">${p.active===false?"👁️ Activar":"🚫 Desactivar"}</button>
-        </div>
-      </div>`).join("")
-  }</div>`;
+  document.querySelectorAll("#adminNew,#adminNewCat,#adminExtrasTab").forEach(b=>b.classList.remove("active"));
+  if(adminView==="extras"){
+    $("adminExtrasTab")?.classList.add("active");
+    body.innerHTML=`<div class="admin-help">Los extras son independientes de los productos. Puedes crear, editar, activar/desactivar y cambiar el precio sin modificar los productos. Mango y Pulpo se manejan aquí.</div>
+      <div class="admin-actions" style="margin-bottom:10px"><button class="small-btn" id="adminNewExtra">➕ Nuevo extra</button></div>
+      <div class="admin-list">${EXTRAS.length?EXTRAS.map(e=>`<div class="admin-extra-row"><div class="admin-extra-main"><b>${escapeHTML(e.name)}</b><div class="admin-muted"><span class="admin-extra-price">${money(e.price)}</span> · ${e.active===false?"DESACTIVADO":"ACTIVO"}</div></div><div class="admin-extra-actions"><button class="small-btn" data-edit-extra="${escapeHTML(e.id)}">✏️ Editar</button><button class="small-btn" data-toggle-extra="${escapeHTML(e.id)}">${e.active===false?"👁️ Activar":"🚫 Desactivar"}</button></div></div>`).join(""):"<div class='empty'>No hay extras creados.</div>"}</div>`;
+    $("adminNewExtra").onclick=adminNewExtra;
+    body.querySelectorAll("[data-edit-extra]").forEach(b=>b.onclick=()=>adminEditExtra(b.dataset.editExtra));
+    body.querySelectorAll("[data-toggle-extra]").forEach(b=>b.onclick=async()=>{
+      const e=EXTRAS.find(x=>String(x.id)===String(b.dataset.toggleExtra));if(!e)return;
+      const old=e.active;e.active=!old;
+      try{await saveExtraToSupabase(e);localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));renderCatalog();renderAdmin();toast(e.active?"☁️ Extra activado":"☁️ Extra desactivado");}
+      catch(err){e.active=old;console.error(err);toast("❌ No se pudo guardar el extra");}
+    });
+    return;
+  }
+  $("adminNew")?.classList.add("active");
+  body.innerHTML=`<div class="admin-help">Productos, categorías y extras se sincronizan con Supabase. Desactivar un producto lo oculta del catálogo; desactivar un extra evita que aparezca como opción nueva.</div><div class="admin-list">${PRODUCTS.map(p=>`<div class="admin-row"><div class="admin-row-top"><div><div class="admin-row-name">${escapeHTML(p.name)}</div><div class="admin-muted">${escapeHTML(p.cat)} · ${money(p.price)} · ${p.active===false?"DESACTIVADO":"ACTIVO"}</div></div><span>${p.active===false?"⛔":"✅"}</span></div><div class="admin-actions"><button class="small-btn" data-edit-product="${escapeHTML(p.id)}">✏️ Editar</button><button class="small-btn" data-toggle-product="${escapeHTML(p.id)}">${p.active===false?"👁️ Activar":"🚫 Desactivar"}</button></div></div>`).join("")}</div>`;
   body.querySelectorAll("[data-edit-product]").forEach(b=>b.onclick=()=>adminEdit(b.dataset.editProduct));
-  body.querySelectorAll("[data-toggle-product]").forEach(b=>b.onclick=async()=>{
-    const p=PRODUCTS.find(x=>x.id===b.dataset.toggleProduct); if(!p)return;
-    const previous=p.active; p.active=p.active===false;
-    try{ await saveProductToSupabase(p); saveCatalogLocal(); renderCatalog(); renderAdmin(); toast(p.active?"☁️ Producto activado":"☁️ Producto desactivado"); }
-    catch(e){ p.active=previous; console.error(e); toast("❌ No se pudo guardar en la nube"); }
-  });
+  body.querySelectorAll("[data-toggle-product]").forEach(b=>b.onclick=async()=>{const p=PRODUCTS.find(x=>String(x.id)===String(b.dataset.toggleProduct));if(!p)return;const old=p.active;p.active=p.active===false;try{await saveProductToSupabase(p);saveCatalogLocal();renderCatalog();renderAdmin();toast(p.active?"☁️ Producto activado":"☁️ Producto desactivado");}catch(e){p.active=old;console.error(e);toast("❌ No se pudo guardar en la nube");}});
+}
+function extraChecksHTML(selectedIds){
+  if(!EXTRAS.length) return '<div class="admin-help">No hay extras creados todavía. Crea Mango, Pulpo u otros extras desde la pestaña 🧂 Extras.</div>';
+  const selected=new Set((selectedIds||[]).map(String));
+  return `<div class="admin-section-title">🧂 Extras permitidos para este producto</div><div class="admin-checks">${EXTRAS.map(e=>`<label class="admin-check"><input type="checkbox" class="aExtra" value="${escapeHTML(e.id)}" ${selected.has(String(e.id))?"checked":""} ${e.active===false?"disabled":""}> ${escapeHTML(e.name)} +${money(e.price)} ${e.active===false?"(desactivado)":""}</label>`).join("")}</div>`;
 }
 function adminForm(p){
   const editing=!!p;
   const x=p||{id:"",name:"",price:0,cat:CATEGORIES[0]||"General",desc:"",active:true,allowMango:false,allowPulpo:false,askColor:false,askSpicy:false,askTostitosColor:false,askShrimpStyle:false};
-  return `<div class="admin-form">
-    <label>Nombre<input id="aName" value="${escapeHTML(x.name)}"></label>
-    <label>Precio<input id="aPrice" type="number" min="0" step="1" value="${Number(x.price||0)}"></label>
-    <label>Categoría<select id="aCat">${CATEGORIES.map(c=>`<option ${c===x.cat?"selected":""}>${escapeHTML(c)}</option>`).join("")}</select></label>
-    <label>Descripción<input id="aDesc" value="${escapeHTML(x.desc||"")}"></label>
-    <div><b>Opciones del producto</b></div>
-    <div class="admin-checks">
-      <label class="admin-check"><input type="checkbox" id="aMango" ${x.allowMango?"checked":""}> Permitir mango +$5</label>
-      <label class="admin-check"><input type="checkbox" id="aPulpo" ${x.allowPulpo?"checked":""}> Permitir pulpo +$5</label>
-      <label class="admin-check"><input type="checkbox" id="aColor" ${x.askColor?"checked":""}> Preguntar color de aguachile</label>
-      <label class="admin-check"><input type="checkbox" id="aSpicy" ${x.askSpicy?"checked":""}> Preguntar picor</label>
-      <label class="admin-check"><input type="checkbox" id="aTostitos" ${x.askTostitosColor?"checked":""}> Preguntar color de Tostitos</label>
-      <label class="admin-check"><input type="checkbox" id="aShrimpStyle" ${x.askShrimpStyle?"checked":""}> 🍤 Preguntar tipo de camarón (Cocido / Curtido)</label>
-    </div>
-    <div class="modal-actions">
-      <button id="adminCancel">Cancelar</button>
-      <button class="confirm" id="adminSave">${editing?"Guardar cambios":"Crear producto"}</button>
-    </div>
-  </div>`;
+  // Integra también los extras que ya estaban configurados directamente
+  // en el producto antes de usar producto_extras. Así no se pierde Mango/Pulpo
+  // al editar productos existentes.
+  const selectedIds=[...(PRODUCT_EXTRAS[String(x.id)]||[])];
+  const selectedNames=new Set(selectedIds.map(id=>extraById(id)?.name?.trim().toLowerCase()).filter(Boolean));
+  if(x.allowMango && !selectedNames.has("mango")){
+    const e=extraByName("Mango");
+    if(e) selectedIds.push(String(e.id));
+  }
+  if(x.allowPulpo && !selectedNames.has("pulpo")){
+    const e=extraByName("Pulpo");
+    if(e) selectedIds.push(String(e.id));
+  }
+  return `<div class="admin-form"><label>Nombre<input id="aName" value="${escapeHTML(x.name)}"></label><label>Precio<input id="aPrice" type="number" min="0" step="1" value="${Number(x.price||0)}"></label><label>Categoría<select id="aCat">${CATEGORIES.map(c=>`<option ${c===x.cat?"selected":""}>${escapeHTML(c)}</option>`).join("")}</select></label><label>Descripción<input id="aDesc" value="${escapeHTML(x.desc||"")}"></label><div><b>Opciones especiales del producto</b></div><div class="admin-checks"><label class="admin-check"><input type="checkbox" id="aColor" ${x.askColor?"checked":""}> Preguntar color de aguachile</label><label class="admin-check"><input type="checkbox" id="aSpicy" ${x.askSpicy?"checked":""}> Preguntar picor</label><label class="admin-check"><input type="checkbox" id="aTostitos" ${x.askTostitosColor?"checked":""}> Preguntar color de Tostitos</label><label class="admin-check"><input type="checkbox" id="aShrimpStyle" ${x.askShrimpStyle?"checked":""}> 🍤 Preguntar tipo de camarón (Cocido / Curtido)</label></div>${extraChecksHTML(selectedIds)}<div class="modal-actions"><button id="adminCancel">Cancelar</button><button class="confirm" id="adminSave">${editing?"Guardar cambios":"Crear producto"}</button></div></div>`;
 }
-function adminEdit(id){
-  const p=PRODUCTS.find(x=>x.id===id);
-  if(!p)return;
+async function saveProductAndExtras(p){
+  await saveProductToSupabase(p);
+  const ids=[...document.querySelectorAll(".aExtra:checked")].map(x=>x.value);
+  await saveProductExtrasToSupabase(p.id,ids);
+  saveCatalogLocal();
+}
+async function adminEdit(id){
+  const p=PRODUCTS.find(x=>String(x.id)===String(id));if(!p)return;
   $("adminBody").innerHTML=adminForm(p);
   $("adminCancel").onclick=renderAdmin;
-  $("adminSave").onclick=async()=>{
-    const previous={...p};
-    p.name=$("aName").value.trim();
-    p.price=Number($("aPrice").value||0);
-    p.cat=$("aCat").value;
-    p.desc=$("aDesc").value.trim();
-    p.allowMango=$("aMango").checked;p.allowPulpo=$("aPulpo").checked;
-    p.askColor=$("aColor").checked;
-    p.askSpicy=$("aSpicy").checked;
-    p.askTostitosColor=$("aTostitos").checked;
-    p.askShrimpStyle=$("aShrimpStyle").checked;
-
-    if(p.modal!=="aguachile" && p.modal!=="tostiaguachile" && p.modal!=="tostadaAguachile" &&
-       p.modal!=="tostadaExtras" && p.modal!=="tostadaPulpo" && p.modal!=="ceviche"){
-      p.modal=(p.askTostitosColor||p.askColor||p.askSpicy||p.allowMango||p.allowPulpo||p.askShrimpStyle)?"custom":undefined;
-    }
-    try{
-      await saveProductToSupabase(p);
-      saveCatalogLocal(); renderCatalog(); renderAdmin(); toast("☁️ Producto guardado en la nube");
-    }catch(e){
-      Object.assign(p,previous);
-      console.error(e); toast("❌ No se pudo guardar en la nube");
-    }
-  };
+  $("adminSave").onclick=async()=>{const previous={...p};p.name=$("aName").value.trim();p.price=Number($("aPrice").value||0);p.cat=$("aCat").value;p.desc=$("aDesc").value.trim();p.askColor=$("aColor").checked;p.askSpicy=$("aSpicy").checked;p.askTostitosColor=$("aTostitos").checked;p.askShrimpStyle=$("aShrimpStyle").checked;try{await saveProductAndExtras(p);renderCatalog();renderAdmin();toast("☁️ Producto guardado en la nube");}catch(e){Object.assign(p,previous);console.error(e);toast("❌ No se pudo guardar el producto");}};
 }
-function adminNew(){
-  $("adminBody").innerHTML=adminForm(null);
-  $("adminCancel").onclick=renderAdmin;
-  $("adminSave").onclick=async()=>{
-    const name=$("aName").value.trim(),price=Number($("aPrice").value||0),cat=$("aCat").value;
-    if(!name){toast("Escribe un nombre");return}
-    const allowMango=$("aMango").checked,allowPulpo=$("aPulpo").checked;
-    const askColor=$("aColor").checked,askSpicy=$("aSpicy").checked,askTostitosColor=$("aTostitos").checked,askShrimpStyle=$("aShrimpStyle").checked;
-    const p={id:"prod-"+Date.now(),name,price,cat,desc:$("aDesc").value.trim(),active:true,
-      allowMango,allowPulpo,askColor,askSpicy,askTostitosColor,askShrimpStyle,
-      modal:(allowMango||allowPulpo||askColor||askSpicy||askTostitosColor||askShrimpStyle)?"custom":undefined};
-    try{
-      await saveProductToSupabase(p);
-      PRODUCTS.push(p); saveCatalogLocal(); renderCatalog(); renderAdmin(); toast("☁️ Producto creado en la nube");
-    }catch(e){ console.error(e); toast("❌ No se pudo crear el producto en la nube"); }
-  };
+async function adminNew(){
+  $("adminBody").innerHTML=adminForm(null);$("adminCancel").onclick=renderAdmin;
+  $("adminSave").onclick=async()=>{const name=$("aName").value.trim(),price=Number($("aPrice").value||0),cat=$("aCat").value;if(!name){toast("Escribe un nombre");return}const p={id:"prod-"+Date.now(),name,price,cat,desc:$("aDesc").value.trim(),active:true,allowMango:false,allowPulpo:false,askColor:$("aColor").checked,askSpicy:$("aSpicy").checked,askTostitosColor:$("aTostitos").checked,askShrimpStyle:$("aShrimpStyle").checked,modal:( $("aTostitos").checked||$("aColor").checked||$("aSpicy").checked||$("aShrimpStyle").checked)?"custom":undefined};try{await saveProductAndExtras(p);PRODUCTS.push(p);renderCatalog();renderAdmin();toast("☁️ Producto creado en la nube");}catch(e){console.error(e);toast("❌ No se pudo crear el producto");}};
 }
-function openAdmin(){$("adminBack").classList.add("show");renderAdmin()}
-$("adminBtn").onclick=openAdmin; if($("topAdminBtn")) $("topAdminBtn").onclick=openAdmin;
+async function adminEditExtra(id){
+  const e=EXTRAS.find(x=>String(x.id)===String(id));if(!e)return;
+  $("adminBody").innerHTML=`<div class="admin-form"><label>Nombre<input id="aeName" value="${escapeHTML(e.name)}"></label><label>Precio<input id="aePrice" type="number" min="0" step="1" value="${Number(e.price||0)}"></label><div class="modal-actions"><button id="aeCancel">Cancelar</button><button class="confirm" id="aeSave">Guardar cambios</button></div></div>`;
+  $("aeCancel").onclick=renderAdmin;
+  $("aeSave").onclick=async()=>{const old={...e};e.name=$("aeName").value.trim();e.price=Number($("aePrice").value||0);if(!e.name){toast("Escribe un nombre");return}try{await saveExtraToSupabase(e);localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));renderCatalog();renderAdmin();toast("☁️ Extra guardado en la nube");}catch(err){Object.assign(e,old);console.error(err);toast("❌ No se pudo guardar el extra");}};
+}
+async function adminNewExtra(){
+  $("adminBody").innerHTML=`<div class="admin-form"><label>Nombre<input id="aeName" placeholder="Ej. Aguacate"></label><label>Precio<input id="aePrice" type="number" min="0" step="1" value="5"></label><div class="modal-actions"><button id="aeCancel">Cancelar</button><button class="confirm" id="aeSave">Crear extra</button></div></div>`;
+  $("aeCancel").onclick=renderAdmin;
+  $("aeSave").onclick=async()=>{const name=$("aeName").value.trim(),price=Number($("aePrice").value||0);if(!name){toast("Escribe un nombre");return}if(EXTRAS.some(e=>e.name.trim().toLowerCase()===name.toLowerCase())){toast("Ese extra ya existe");return}const e={id:"extra-"+Date.now(),name,price,active:true,order:EXTRAS.length+1};try{await saveExtraToSupabase(e);EXTRAS.push(e);localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));renderAdmin();toast("☁️ Extra creado en la nube");}catch(err){console.error(err);toast("❌ No se pudo crear el extra");}};
+}
+function openAdmin(){adminView="products";$("adminBack").classList.add("show");renderAdmin()}
+$("adminBtn").onclick=openAdmin;if($("topAdminBtn"))$("topAdminBtn").onclick=openAdmin;
 $("adminBack").onclick=e=>{if(e.target===$("adminBack"))$("adminBack").classList.remove("show")};
-$("adminNew").onclick=adminNew;
-$("adminNewCat").onclick=()=>{
-  const name=prompt("Nombre de la nueva categoría:");
-  if(!name||!name.trim())return;
-  const c=name.trim();
-  if(CATEGORIES.includes(c)){toast("Esa categoría ya existe");return}
-  (async()=>{
-    try{ await saveCategoryToSupabase(c); CATEGORIES.push(c); saveCatalogLocal(); renderCatalog(); renderAdmin(); toast("☁️ Categoría creada en la nube"); }
-    catch(e){ console.error(e); toast("❌ No se pudo crear la categoría en la nube"); }
-  })();
-};
+$("adminNew").onclick=()=>{adminView="products";adminNew()};
+$("adminExtrasTab").onclick=()=>{adminView="extras";renderAdmin()};
+$("adminNewCat").onclick=()=>{const name=prompt("Nombre de la nueva categoría:");if(!name||!name.trim())return;const c=name.trim();if(CATEGORIES.includes(c)){toast("Esa categoría ya existe");return}(async()=>{try{await saveCategoryToSupabase(c);CATEGORIES.push(c);saveCatalogLocal();renderCatalog();renderAdmin();toast("☁️ Categoría creada en la nube");}catch(e){console.error(e);toast("❌ No se pudo crear la categoría en la nube");}})()};
 
 renderCatalog();renderCart();renderOrders();updateStats();
-syncCatalogFromSupabase();
+syncExtrasFromSupabase(true).finally(()=>syncCatalogFromSupabase());
 </script>
 </body>
 </html>
