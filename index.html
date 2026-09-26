@@ -710,11 +710,20 @@ async function saveExtraToSupabase(extra){
 async function saveProductExtrasToSupabase(productId,extraIds){
   const pid=Number(productId);
   if(!Number.isFinite(pid)) return;
+  const ids=[...new Set((extraIds||[]).map(String).filter(Boolean))];
   const {error:delError}=await supabaseClient.from("producto_extras").delete().eq("producto_id",pid);
   if(delError)throw delError;
-  const rows=[...new Set(extraIds.map(String))].map(id=>({producto_id:pid,extra_id:Number(id)})).filter(x=>Number.isFinite(x.extra_id));
-  if(rows.length){const {error}=await supabaseClient.from("producto_extras").insert(rows);if(error)throw error;}
-  PRODUCT_EXTRAS[String(productId)]=rows.map(x=>String(x.extra_id));
+  // extra_id puede ser INTEGER o UUID según la configuración de Supabase.
+  // No lo convertimos a Number para no perder IDs UUID.
+  const rows=ids.map(id=>({producto_id:pid,extra_id:id}));
+  if(rows.length){
+    const {error}=await supabaseClient.from("producto_extras").insert(rows);
+    if(error)throw error;
+  }
+  // Guardamos inmediatamente la relación local para que el modal la muestre
+  // aunque Realtime tarde unos milisegundos en actualizarla.
+  PRODUCT_EXTRAS[String(productId)]=ids;
+  localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));
 }
 function extraById(id){return EXTRAS.find(e=>String(e.id)===String(id));}
 function extraByName(name){return EXTRAS.find(e=>e.name.trim().toLowerCase()===String(name).trim().toLowerCase());}
@@ -724,12 +733,11 @@ function mappedActiveExtras(p){
   return ids.map(extraById).filter(e=>e&&e.active!==false);
 }
 function productExtrasForModal(p,cfg){
-  // Mango y Pulpo ya no se preguntan al agregar ningún producto.
-  // Se excluyen incluso si quedaron configurados en Supabase o en datos antiguos.
-  return mappedActiveExtras(p).filter(e=>{
-    const name=e.name.trim().toLowerCase();
-    return name!=="mango" && name!=="pulpo";
-  });
+  // Los extras NO se agregan automáticamente por el tipo de producto.
+  // Solo aparecen los que el usuario marcó manualmente en
+  // Administración → Editar producto → Extras permitidos.
+  // Esto permite usar Mango, Pulpo o cualquier otro extra de forma selectiva.
+  return mappedActiveExtras(p);
 }
 function extraSelectionKey(e){return "extra_"+String(e.id);}
 function extraLabel(e){return `${escapeHTML(e.name)} +${money(e.price)}`;}
