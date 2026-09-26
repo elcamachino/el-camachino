@@ -690,14 +690,22 @@ async function syncExtrasFromSupabase(silent=false){
 }
 async function saveExtraToSupabase(extra){
   const row={nombre:extra.name.trim(),precio:Number(extra.price||0),activo:extra.active!==false,orden:Number(extra.order||0)};
-  if(extra.id && !String(extra.id).startsWith("extra-")){
-    const {data,error}=await supabaseClient.from("extras").update(row).eq("id",extra.id).select("*").single();
+  try{
+    if(extra.id && !String(extra.id).startsWith("extra-")){
+      const {data,error}=await supabaseClient.from("extras").update(row).eq("id",extra.id).select("*").single();
+      if(error)throw error;
+      extra.id=String(data.id);return {data,cloud:true};
+    }
+    const {data,error}=await supabaseClient.from("extras").insert(row).select("*").single();
     if(error)throw error;
-    extra.id=String(data.id);return data;
+    extra.id=String(data.id);return {data,cloud:true};
+  }catch(error){
+    // Si Supabase rechaza la operación (por ejemplo, una política RLS),
+    // el extra sigue funcionando en este dispositivo y no se pierde.
+    console.warn("No se pudo guardar el extra en Supabase; se conserva localmente:",error);
+    localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));
+    return {data:null,cloud:false,error};
   }
-  const {data,error}=await supabaseClient.from("extras").insert(row).select("*").single();
-  if(error)throw error;
-  extra.id=String(data.id);return data;
 }
 async function saveProductExtrasToSupabase(productId,extraIds){
   const pid=Number(productId);
@@ -737,8 +745,8 @@ async function saveProductToSupabase(p){
     categoria_id:cat.id,
     descripcion:p.desc||"",
     activo:p.active!==false,
-    ask_mango_choice:p.allowMango===true,
-    allow_pulpo:p.allowPulpo===true,
+    ask_mango_choice:false,
+    allow_pulpo:false,
     ask_color:p.askColor===true,
     ask_spicy:p.askSpicy===true,
     ask_tostitos_color:p.askTostitosColor===true,
@@ -1306,7 +1314,7 @@ async function renderAdmin(){
   document.querySelectorAll("#adminNew,#adminNewCat,#adminExtrasTab").forEach(b=>b.classList.remove("active"));
   if(adminView==="extras"){
     $("adminExtrasTab")?.classList.add("active");
-    body.innerHTML=`<div class="admin-help">Los extras son independientes de los productos. Puedes crear, editar, activar/desactivar y cambiar el precio sin modificar los productos. Mango y Pulpo se manejan aquí.</div>
+    body.innerHTML=`<div class="admin-help">Los extras son independientes de los productos. Puedes crear, editar, activar/desactivar y cambiar el precio sin modificar los productos. Mango y Pulpo son extras normales y ya no se preguntan automáticamente al agregar un producto.</div>
       <div class="admin-actions" style="margin-bottom:10px"><button class="small-btn" id="adminNewExtra">➕ Nuevo extra</button></div>
       <div class="admin-list">${EXTRAS.length?EXTRAS.map(e=>`<div class="admin-extra-row"><div class="admin-extra-main"><b>${escapeHTML(e.name)}</b><div class="admin-muted"><span class="admin-extra-price">${money(e.price)}</span> · ${e.active===false?"DESACTIVADO":"ACTIVO"}</div></div><div class="admin-extra-actions"><button class="small-btn" data-edit-extra="${escapeHTML(e.id)}">✏️ Editar</button><button class="small-btn" data-toggle-extra="${escapeHTML(e.id)}">${e.active===false?"👁️ Activar":"🚫 Desactivar"}</button></div></div>`).join(""):"<div class='empty'>No hay extras creados.</div>"}</div>`;
     $("adminNewExtra").onclick=adminNewExtra;
@@ -1314,7 +1322,7 @@ async function renderAdmin(){
     body.querySelectorAll("[data-toggle-extra]").forEach(b=>b.onclick=async()=>{
       const e=EXTRAS.find(x=>String(x.id)===String(b.dataset.toggleExtra));if(!e)return;
       const old=e.active;e.active=!old;
-      try{await saveExtraToSupabase(e);localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));renderCatalog();renderAdmin();toast(e.active?"☁️ Extra activado":"☁️ Extra desactivado");}
+      try{const result=await saveExtraToSupabase(e);localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));renderCatalog();renderAdmin();toast(e.active?(result.cloud?"☁️ Extra activado":"💾 Extra activado en este dispositivo"):(result.cloud?"☁️ Extra desactivado":"💾 Extra desactivado en este dispositivo"));}
       catch(err){e.active=old;console.error(err);toast("❌ No se pudo guardar el extra");}
     });
     return;
@@ -1337,14 +1345,7 @@ function adminForm(p){
   // al editar productos existentes.
   const selectedIds=[...(PRODUCT_EXTRAS[String(x.id)]||[])];
   const selectedNames=new Set(selectedIds.map(id=>extraById(id)?.name?.trim().toLowerCase()).filter(Boolean));
-  if(x.allowMango && !selectedNames.has("mango")){
-    const e=extraByName("Mango");
-    if(e) selectedIds.push(String(e.id));
-  }
-  if(x.allowPulpo && !selectedNames.has("pulpo")){
-    const e=extraByName("Pulpo");
-    if(e) selectedIds.push(String(e.id));
-  }
+
   return `<div class="admin-form"><label>Nombre<input id="aName" value="${escapeHTML(x.name)}"></label><label>Precio<input id="aPrice" type="number" min="0" step="1" value="${Number(x.price||0)}"></label><label>Categoría<select id="aCat">${CATEGORIES.map(c=>`<option ${c===x.cat?"selected":""}>${escapeHTML(c)}</option>`).join("")}</select></label><label>Descripción<input id="aDesc" value="${escapeHTML(x.desc||"")}"></label><div><b>Opciones especiales del producto</b></div><div class="admin-checks"><label class="admin-check"><input type="checkbox" id="aColor" ${x.askColor?"checked":""}> Preguntar color de aguachile</label><label class="admin-check"><input type="checkbox" id="aSpicy" ${x.askSpicy?"checked":""}> Preguntar picor</label><label class="admin-check"><input type="checkbox" id="aTostitos" ${x.askTostitosColor?"checked":""}> Preguntar color de Tostitos</label><label class="admin-check"><input type="checkbox" id="aShrimpStyle" ${x.askShrimpStyle?"checked":""}> 🍤 Preguntar tipo de camarón (Cocido / Curtido)</label></div>${extraChecksHTML(selectedIds)}<div class="modal-actions"><button id="adminCancel">Cancelar</button><button class="confirm" id="adminSave">${editing?"Guardar cambios":"Crear producto"}</button></div></div>`;
 }
 async function saveProductAndExtras(p){
@@ -1367,7 +1368,7 @@ async function adminEditExtra(id){
   const e=EXTRAS.find(x=>String(x.id)===String(id));if(!e)return;
   $("adminBody").innerHTML=`<div class="admin-form"><label>Nombre<input id="aeName" value="${escapeHTML(e.name)}"></label><label>Precio<input id="aePrice" type="number" min="0" step="1" value="${Number(e.price||0)}"></label><div class="modal-actions"><button id="aeCancel">Cancelar</button><button class="confirm" id="aeSave">Guardar cambios</button></div></div>`;
   $("aeCancel").onclick=renderAdmin;
-  $("aeSave").onclick=async()=>{const old={...e};e.name=$("aeName").value.trim();e.price=Number($("aePrice").value||0);if(!e.name){toast("Escribe un nombre");return}try{await saveExtraToSupabase(e);localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));renderCatalog();renderAdmin();toast("☁️ Extra guardado en la nube");}catch(err){Object.assign(e,old);console.error(err);toast("❌ No se pudo guardar el extra");}};
+  $("aeSave").onclick=async()=>{const old={...e};e.name=$("aeName").value.trim();e.price=Number($("aePrice").value||0);if(!e.name){toast("Escribe un nombre");return}try{const result=await saveExtraToSupabase(e);localStorage.setItem("elCamachinoExtrasV1",JSON.stringify({version:1,extras:EXTRAS,productExtras:PRODUCT_EXTRAS}));renderCatalog();renderAdmin();toast(result.cloud?"☁️ Extra guardado en la nube":"💾 Extra guardado en este dispositivo");}catch(err){Object.assign(e,old);console.error(err);toast("❌ No se pudo guardar el extra");}};
 }
 async function adminNewExtra(){
   $("adminBody").innerHTML=`<div class="admin-form"><label>Nombre<input id="aeName" placeholder="Ej. Aguacate"></label><label>Precio<input id="aePrice" type="number" min="0" step="1" value="5"></label><div class="modal-actions"><button id="aeCancel">Cancelar</button><button class="confirm" id="aeSave">Crear extra</button></div></div>`;
