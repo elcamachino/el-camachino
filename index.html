@@ -899,7 +899,14 @@ function renderCatalog(){
 }
 
 function addProduct(p){
-  if(p.modal){openModal(p);return}
+  // Un producto debe abrir el selector si tiene CUALQUIER opción activa:
+  // opciones especiales (color/picor/etc.) o extras asignados manualmente.
+  // Antes solo se comprobaba p.modal, por eso los productos nuevos a los que
+  // se les asignaban únicamente extras se agregaban directamente sin preguntar.
+  const cfg=catalogConfigFor(p);
+  const hasAssignedExtras=mappedActiveExtras(p).length>0;
+  const hasOptions=!!p.modal || cfg.askColor || cfg.askSpicy || cfg.askTostitosColor || cfg.askShrimpStyle || hasAssignedExtras;
+  if(hasOptions){openModal(p);return}
   addConfigured(p,{});
 }
 function addConfigured(p,options){
